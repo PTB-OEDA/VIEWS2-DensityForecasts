@@ -1,0 +1,1016 @@
+---
+title: "VIEWS 2.0 Bayesian Density Forecasts Replication Code: Setup and Estimation"
+author: "Patrick T. Brandt"
+description: Model specification documentation for ViEWS2 forecasts
+date: "`r format(Sys.time(), '%B %d, %Y')`" # Do not modify this
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    collapsed: true
+    smooth_scroll: true
+bibliography: Forecast-TS-2023.bib  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+Dynamic applications in ViEWS serve as important forecasts in their own
+right. Since the data are inherently serially correlated (in space, time
+and both) it makes sense that one look at and consider dynamic forecasts
+as a baseline.\
+\
+Above the density baselines proposed as part of ViEWS 2.0, the forecasts
+proposed here provide Bayesian density forecasts that allow for the
+evaluation of dynamics (autoregression, random walks [with and without
+drift], and time trends) and for different distributional assumptions
+(e.g., Poisson, negative binomial, zero-inflated, Tweedie). The idea
+here is that the forecasts proposed should be baseline in the sense that
+no-change or density forecasts account for the basic properties of the
+data (beyond which covariates can then be considered by either LASSO or
+elastic-net additions, which we leave for others).
+
+The goal here is to take a fully Bayesian approach that admits that for
+the conflict forecaster is uncertain about the following choices:
+
+1.  Data in the sample / training: this in the main is addressed by the
+    design of the forecasting competition itself.
+
+2.  Choice of the parametric density (e.g., Poisson, compound Poisson,
+    negative binomial). A review of the papers from the previous event
+    shows that this is a question to be considered and especially in
+    light of the forecast baseline being a simple Poisson distribution
+    (to be estimated based on the training sample chosen above).
+
+3.  Specification of the dynamics: autoregression, local trends, global
+    trends, relative weighting of each. In the earlier analyses of the
+    pgm and cm data various approaches to *nearness* in space-time were
+    considered for how serially correlated the events predicted may be.
+    The idea here is to benchmark and systematize how one at least
+    thinks about this in the time dimension
+
+4.  Evaluation of the forecast densities: focus on distributions, not on
+    single quantiles nor onsummary statistics (means, medians). This
+    requires thinking about the comparing the relative costs via Murphy
+    diagrams, CRPS, DRPS, etc.
+
+As a critical consideration here, being "Bayesian" in this context is
+not to admit that one class or set of prior beliefs exists about the
+data, the forecast models, or the parmeters alone (in these models). The
+idea here is one that models and probabilistic statements are open for
+interpretation and the weighting of evidence about what one more or less
+sees as true (for approaches to this see [@gill2021political;
+@mcelreath2018statistical]). So based on in- and out-of-sample
+comparisons as an assessment will and ought to be made that looks at the
+relative properties and beliefs about the performance of models and
+their forecast densities.
+
+This file and the code here estimates the basic models reported and selected in the analyses.  The code is not meant to be fast --- it runs serially --- and does not include any optimizations for running in parallel (e.g., run the same model with $k$ different PDFs on separate cores).  It is meant to be illustrative, though it is what is used for the model selection steps for the subsequent Bayesian density forecasts.
+
+<!-- Main idea: focus on dynamics and densities -->
+
+<!-- Be Bayesian to do this -->
+
+<!-- A basic model setup -->
+
+<!-- Sample selection: using the `cm` data here: so units are country-months -->
+<!-- unless otherwise noted. Global coverage is the goal for the forecast -->
+<!-- horizons defined for the ViEWS 2.0. -->
+
+<!-- ## Dynamics -->
+
+<!-- Discuss the options here -->
+
+<!-- autoregression, random walks [with and without drift], and time trends) -->
+
+<!-- ## Be Bayesian -->
+
+<!-- Think about what this means here: -->
+
+<!-- ## Evaluation -->
+
+<!-- ## This not not all new, but it is now tractable in real time -->
+
+# Data setup
+
+Here begin with setting up the training data as provided by
+[ViEWS](https://viewsforecasting.org/prediction-competition-2/). This
+takes the data as given from ViEWS and reads it into several data frames
+and some subsets.
+
+### Reading in data
+
+Now these are compressed, which means there are only data for all
+observations that are observed.
+
+```{r readdata, echo=TRUE}
+# For the parquet files
+library(arrow)
+
+# CM level data: features and outcomes
+cmf <- read_parquet("~/ViEWS2/shared_competition_data/cm_features_to_oct2017.parquet")
+
+#cmf17 <- read_parquet("~/ViEWS2/shared_competition_data/cm_features_to_oct2017.parquet")
+cmf18 <- read_parquet("~/ViEWS2/shared_competition_data/cm_features_to_oct2018.parquet")
+#cmf19 <- read_parquet("~/ViEWS2/shared_competition_data/cm_features_to_oct2019.parquet")
+#cmf20 <- read_parquet("~/ViEWS2/shared_competition_data/cm_features_to_oct2020.parquet")
+
+# CM level data: outcomes
+cma <- read_parquet("~/ViEWS2/shared_competition_data/cm_actuals_2018.parquet")
+
+#cma18 <- read_parquet("~/ViEWS2/shared_competition_data/cm_actuals_2018.parquet")
+#cma19 <- read_parquet("~/ViEWS2/shared_competition_data/cm_actuals_2019.parquet")
+#cma20 <- read_parquet("~/ViEWS2/shared_competition_data/cm_actuals_2020.parquet")
+#cma21 <- read_parquet("~/ViEWS2/shared_competition_data/cm_actuals_2021.parquet")
+
+countries <- read.csv("~/ViEWS2/shared_competition_data/country_list.csv")
+
+# Save
+save.image("ViEWS2-training.RData")
+```
+
+### Modified data to deal with some missing cases
+
+This will not work with some of the smoothing spline methods (which
+cannot handle missing data), but need to be told that it is missing and
+where it may be missing. To address this, the following code grabs the
+main identifiers from the `cm` data and pads it out appropriately.
+
+```{r data1}
+# Start by making a sub-sample, since we want to just test code at this stage
+# so this will make things faster.
+x <- cmf[,45:95]    # Some features
+y <- cmf$ged_sb     # Main QoI
+yl <- cmf[,10:15]   # Lags of QoI
+
+dt1 <- as.data.frame(cbind(as.factor(cmf$country_id), cmf$month_id, y, yl, x))
+colnames(dt1) <- c("series", "time", "y", colnames(yl), colnames(x))
+
+# Cleanup
+rm(y,x,yl)
+
+```
+
+Now we need to check the completeness of the data / time balances. This
+is necessary because the `mvgam` package has requirements for this to
+make the `mgcv` smoothing splines for the time series models of interest
+here.
+
+```{r checks, echo=TRUE}
+library(tidyr)
+# Data setup check step from mvgam() : below is direct from the package
+all_times_avail = function(time, min_time, max_time){
+  identical(as.numeric(sort(time)),
+            as.numeric(seq.int(from = min_time, to = max_time)))
+}
+
+# Data defn step
+data_train <- dt1
+min_time <- min(data_train$time)
+max_time <- max(data_train$time)
+
+data.frame(series = data_train$series,
+           time = data_train$time) %>%
+  dplyr::group_by(series) %>%
+  dplyr::summarise(all_there = all_times_avail(time,
+                                               min_time,
+                                               max_time)) -> checked_times
+# if(any(checked_times$all_there == FALSE)){
+#   stop('One or more series in "data" is missing observations 
+#         for one or more timepoints', call. = FALSE)
+# }
+
+# Look at the results
+# table(checked_times)
+
+# Observations in the training data per country
+# rowSums(table(dt1$series, dt1$time))
+
+# These are the ones that are complete (as compared to those in checked_times)
+allt <- checked_times$series[checked_times$all_there==TRUE]
+```
+
+So at this stage one faces a modeling choice to use the `mvgam` models:
+
+1.  drop all of the incomplete cases (i.e., those where data are not
+    recorded over some time periods), or
+
+2.  pad the dataset
+
+```{r padding, echo=TRUE}
+
+# Full, padded data
+tmp <- expand.grid(series = unique(dt1$series), 
+                   time = unique(dt1$time), 
+                   KEEP.OUT.ATTRS = FALSE)
+tmp <- expand.grid(series = allt, time = unique(dt1$time), 
+                   KEEP.OUT.ATTRS = FALSE)
+
+# Not adding all of the empty covariates (yet)
+dt2 <- merge(tmp, dt1[,1:9], all.x = TRUE)
+
+dt2 <- (dt1[dt1$series %in% allt,])
+dt2$series <- droplevels(dt2$series)
+
+# Here's the check
+# Note that the data are fully padded out here (same was not true above):
+
+rowSums(table(dt2$series, dt2$time, useNA = "always"))
+```
+
+<!-- # Estimate simple dynamic models -->
+
+<!-- Below the sections work through how to fit various models with different -->
+<!-- conditioning variables, choices of dynamics, and different -->
+<!-- distributions. -->
+
+
+
+<!-- ## GAMs -->
+
+<!-- ## Bayesian GAM -->
+
+<!-- The Bayesian methods we will use are from the `mvgam` package -->
+<!-- [@clark2023dynamic] which builds on [@carpenter2017stan]. This shows how -->
+<!-- to fit a basic model in this package. -->
+
+<!-- ```{r, echo=TRUE} -->
+<!-- #install.packages("cmdstanr", -->
+<!-- #                 repos = c("https://mc-stan.org/r-packages/", -->
+<!-- #                           getOption("repos"))) -->
+
+<!-- # # Get the latest mvgam package -->
+<!-- # remove.packages("mvgam") -->
+<!-- # devtools::install_github("nicholasjclark/mvgam") -->
+<!-- #  -->
+<!-- # # Load -->
+<!-- # library(mvgam) -->
+<!-- #  -->
+<!-- # # Simple Bayesian MVGAM to see if things work -->
+<!-- #  -->
+<!-- # system.time(mv <- mvgam(y ~  s(series, bs = 're') - 1, -->
+<!-- #                         trend_model = "None", -->
+<!-- #                         data=dt2, -->
+<!-- #                         family=poisson(), -->
+<!-- #                         #run_model = FALSE, -->
+<!-- # #                        use_lv = TRUE, n_lv = 2, -->
+<!-- #                         upper_bounds = 49000, -->
+<!-- #                         chains = 1, burnin = 1000, samples = 100)) -->
+
+<!-- # save.image("mvgams1.RData") -->
+
+
+
+
+<!-- ``` -->
+
+<!-- # par(mfrow=c(5,4)) -->
+
+<!-- # for(i in 1:20) { -->
+
+<!-- #   plot_mvgam_trend(mv, series = i, n_cores=4) -->
+
+<!-- # } -->
+
+<!-- #  -->
+
+<!-- # par(mfrow=c(5,4)) -->
+
+<!-- # for(i in 21:40) { -->
+
+<!-- #   plot_mvgam_trend(mv, series = i, n_cores=4) -->
+
+<!-- # } -->
+
+<!-- ``` -->
+
+# BAM / GAM trend models with different distributions
+
+The Estimators in this section use basic unit specific models and allow for
+different dynamics and functional distributional forms. In this section
+the above is extended to look at the following:
+
+1.  Poisson
+
+2.  Zero inflated Poisson (to better model the "excess" or common null
+    reporting of non-events).
+
+3.  Negative binomial models: these fit the same mean function as the
+    Poisson model, but they allow for a variance specification so that
+    the variance of the counts is larger than the mean number of events
+    per unit.
+
+4.  Compound Poisson / Tweedie models. These are less well known
+    generalizations of the above (at least among social scientists who
+    are probably more familiar with [@king1989variance]). Details are in
+    [@dunn2005series; \@dunn2008evaluation; @dunn2017tweedie].
+
+```{r pkg, echo=TRUE}
+dt1 <- dt1[,1:10]  # Only grab the first 10 col
+# library(mvgam)
+# library(lme4)
+# library(gamm4)
+library(mgcv)
+library(glmmTMB)
+
+```
+
+### Poisson models
+
+Fits local Poisson and tensor Poisson models.
+
+```{r poisson, echo-TRUE, fig.keep='all'}
+
+# Poisson models -- simple
+
+psn.global <- gam(y ~ ged_sb_tlag_1 + s(time),
+                     data=dt1,
+           family = "poisson",
+           method = "REML")
+
+summary(psn.global)
+
+plot(psn.global, pages=1)
+
+psn.local <- bam(y ~ ged_sb_tlag_1 + s(time, series, bs="fs"),
+                data=dt1,
+                family = "poisson",
+                discrete=TRUE)
+
+summary(psn.local)
+
+plot(psn.local, pages=1)
+
+
+psn.local.te <- bam(y ~ ged_sb_tlag_1 + 
+                      te(time, series, bs="fs"),
+                 data=dt1,
+                 family = "poisson",
+                 discrete=TRUE)
+
+summary(psn.local.te)
+
+```
+
+### Zero Inflated Poisson models
+
+Fits local zero inflated Poisson and tensor zero inflated Poisson models.
+
+```{r zip, echo-TRUE, fig.keep='all'}
+
+# ZIP Models -- simple
+
+zip.local <- bam(y ~ ged_sb_tlag_1 + s(time, series, bs="fs"),
+                data=dt1,
+                family = ziP(),
+                discrete=TRUE)
+
+summary(zip.local)
+
+plot(zip.local, pages=1)
+
+# With tensors?
+
+zip.local.te <- bam(y ~ ged_sb_tlag_1 + te(time, series, bs="fs"),
+                   data=dt1,
+                   family = ziP(),
+                   discrete=TRUE)
+
+summary(zip.local.te)
+
+```
+
+### NB models
+
+Fits local negative binomial and tensor negative binomial models.
+
+```{r nb, echo-TRUE, fig.keep='all'}
+
+nb.local <- bam(y ~ ged_sb_tlag_1 + s(time, series, bs="fs"),
+                 data=dt1,
+                 family = "nb",
+                 discrete=TRUE)
+
+summary(nb.local)
+
+plot(nb.local, pages=1)
+
+# With tensors?
+
+nb.local.te <- bam(y ~ ged_sb_tlag_1 + te(time, series, bs="fs"),
+                    data=dt1,
+                    family = "nb",
+                    discrete=TRUE)
+
+summary(nb.local.te)
+
+```
+  
+### Tweedie models
+
+These are versions from [@adelson66] and then extended to GLMs by
+[@Jorgensen87]. Suppose our counts are $Y$ (surpressing and subscripts
+for countries and time here). For the class of EDM (Exponential
+Dispersion Models) defined by Jorgensen, the Tweedie group
+[@tweedie1984index] have the property that for a count distribution
+
+$V(Y) = f \cdot g(E(Y))$
+
+where for the variance $V()$ , $f$ is a dispersion parameter, and $g()$
+is a function for the mean-to-variance relationship. Here that is taken
+to be
+
+$g(E(Y)) = \phi E(Y)^p$
+
+These are a power law case between the mean and the variance. So the
+standard negative binomial falls out as the special cases where $f>0$
+and $p=1$, since it just rescales the variance relative to the mean. But
+there are other special cases that come from the Tweedie / compound
+Poisson formulation. When $p=0$ the model reduces in a GLM setup to a
+normal distribution. When $p=1$ this is the assumption of the Poisson
+distribution for $Y$. For $p = 2$ the process is gamma distributed and
+for $p=3$, $Y$ is inverse Gaussian.\^[These are well known in the
+statistics, medical, epidemiology, and ecology modeling communities.
+There are easy to use tools for this as well, e.g. [from
+2014.](https://blog.revolutionanalytics.com/2014/10/a-note-on-tweedie.html "See this for a working example.")]
+In the regression-like approach introduced above, this adds a set of
+dispersion terms, likely $1 < p < 2$ that are of interest.
+
+Fits local Tweedie and tensor Tweedie models.
+
+```{r tweedie, echo-TRUE, fig.keep='all'}
+tw.local <- bam(y ~ ged_sb_tlag_1 + 
+                  s(time, series, bs="fs"),
+                data=dt1,
+                family = tw(),
+                discrete=TRUE)
+
+summary(tw.local)
+
+plot(tw.local, pages=1)
+
+# With tensors?
+
+tw.local.te <- bam(y ~ ged_sb_tlag_1 + te(time, series, bs="fs"),
+                   data=dt1,
+                   family = tw(),
+                   discrete=TRUE)
+
+summary(tw.local.te)
+
+```
+
+
+## Model selection results for in-sample fits 
+
+Here we report AIC values for the earlier models
+
+```{r AICs}
+AIC(psn.global)
+
+AIC(psn.local)
+AIC(psn.local.te)
+
+#AIC(nb.global)
+AIC(nb.local)
+AIC(nb.local.te)
+
+AIC(zip.local)
+AIC(zip.local.te)
+
+AIC(tw.local)
+AIC(tw.local.te)
+
+
+```
+
+## Alternative  models: GLMM specifications
+
+This section fits the GLMM versions of the models over the densities: Poisson, negative binomial, and Tweedie.
+
+```{r altmodels, echo=TRUE, warning=FALSE}
+# # GLMER version
+# 
+# psn.glmer <- glmer(y ~ (time | series), data=dt1, family="poisson")
+# 
+# #nb.glmer <- glmer.nb(y ~ (time | series), data=dt1)
+# 
+# # GAMM / GAMM 4 -- these need work since the groups are not right.
+# 
+# psn.gamm <- gamm4(y ~ ged_sb_tlag_1 + s(time),
+#                   random=~(time|series), 
+#                   data=dt1, 
+#                   family = "poisson")
+# 
+# summary(psn.gamm$gam)
+# summary(psn.gamm$mer)
+# 
+# plot(psn.gamm$gam)
+# plot(psn.gamm$mer)
+# 
+# system.time(psn1.gamm <- gamm(y ~ ged_sb_tlag_1 + s(time),
+#                   random=list(series=~time), 
+#                   data=dt1, 
+#                   family = "poisson"))
+# 
+# system.time(nb.gamm <- gamm(y ~ ged_sb_tlag_1 + s(time),
+#                               random=list(series=~1), 
+#                               data=dt1, 
+#                               family = "nb", niterPQL = 100))
+# 
+# plot(nb.gamm$gam, pages=1)
+# plot(nb.gamm$lme, pages=1)
+# 
+# summary(nb.gamm$gam)
+# summary(nb.gamm$lme)
+# 
+# 
+# system.time(tw.gamm <- gamm(y ~ ged_sb_tlag_1 + s(time),
+#                             random=list(series=~1), 
+#                             data=dt1, 
+#                             family = "tw", niterPQL = 100))
+# 
+# plot(tw.gamm$gam, pages=1)
+# plot(tw.gamm$lme, pages=1)
+# 
+# summary(tw.gamm$gam)
+# summary(tw.gamm$lme)
+# 
+# system.time(psn.ar1.gamm <- gamm(y ~ s(time),
+#                               correlation = corAR1(form=~-1|series),
+#                               data=dt1,
+#                               family = "poisson", niterPQL = 100))
+# summary(psn.ar1.gamm$gam)
+# summary(psn.ar1.gamm$lme)
+# 
+# plot(psn.ar1.gamm$gam, pages=1)
+# plot(psn.ar1.gamm$lme, pages=1)
+# 
+
+# glmmTMB versions
+
+# Need time as a factor for the next command...
+dt1$time <- factor(dt1$time)
+
+# This one will crash...
+# options(glmmTMB.cores=4)
+# psn.glmmtmb <- glmmTMB(y ~ (time|series), family = poisson,
+#                        data=dt1)
+
+psnar1.glmmtmb <- glmmTMB(y ~ ar1(time + 0|series), family = poisson,
+                       data=dt1, control=glmmTMBControl(parallel = 4))
+
+nbar1.glmmtmb <- glmmTMB(y ~ ar1(time + 0|series), family = nbinom1(),
+                          data=dt1)
+
+cmpar1.glmmtmb <- glmmTMB(y ~ ar1(time + 0|series), family = compois(),
+                         data=dt1)
+
+twar1.glmmtmb <- glmmTMB(y ~ ar1(time + 0|series), family = tweedie(),
+                         data=dt1)
+```
+
+## Model selection results for GLMM models
+
+```{r altfits, echo=TRUE}
+# Make a table of in-sample fits
+library(bbmle)
+
+AICtab(psnar1.glmmtmb, nbar1.glmmtmb, cmpar1.glmmtmb, twar1.glmmtmb, 
+       delta =FALSE, base=TRUE)
+AICctab(psnar1.glmmtmb, nbar1.glmmtmb, cmpar1.glmmtmb, twar1.glmmtmb)
+
+BICtab(psnar1.glmmtmb, nbar1.glmmtmb, cmpar1.glmmtmb, twar1.glmmtmb)
+
+summary(twar1.glmmtmb)
+summary(nbar1.glmmtmb)
+
+# Among the Poisson models
+AICtab(psn.global, psn.local, psn.local.te)
+AICtab(nb.local, nb.local.te)
+
+```
+
+Starting with basic model selecion begins with a GAMM that includes simple (time lagged) and deterministic effects for a global smooting trend and local trends.  These are called the `local` models in what follows.  These `local` models are estimated for the various distributions outlined above.  To compare the in-sample fit AIC statistics are ranked as below
+
+```{r AICranks, echo=TRUE}
+# Compare distributions
+# AICtab(psn.local, zip.local, nb.local, tw.local)
+# AICctab(psn.local, zip.local, nb.local, tw.local)
+ICtab(psn.local, zip.local, nb.local, tw.local, 
+      base=TRUE, delta=FALSE)
+```
+
+Clearly the models that admit *some* dispersion of the event counts are strongly preferred.^(The same is true using BIC, or any other related information criteria measure.)
+
+One might then suggest, how much better or worse do these models do as one changes the dynamic specifiations for the trends?  This is seen by looking at tensor products of the GAM splines for the global and local trends (so a temporally more sparse model that has better degrees of freedom).  Even in this case, things are no better, and in fact worse than the specifications discussed above:
+
+```{r AICrankstensors, echo=TRUE}
+# Compare distributions
+AICtab(psn.local.te, zip.local.te, nb.local.te, tw.local.te)
+AICctab(psn.local.te, zip.local.te, nb.local.te, tw.local.te)
+ICtab(psn.local.te, zip.local.te, nb.local.te, tw.local.te, 
+      base=TRUE, delta=FALSE)
+```
+
+If one changes the dynamic specification and moves them into the latent space (so what is done in the GAMM and GLMM-type models), 
+
+```{r otheraics, echo=TRUE}
+AIC(twar1.glmmtmb)
+AIC(nbar1.glmmtmb)
+AIC(cmpar1.glmmtmb)
+AIC(psnar1.glmmtmb)
+
+
+
+```
+(Note: not all of the GAMM and GLMM model variants available on `R` give consistent reporting or computation of the AIC or likelihood-based fit measures.)
+
+# Generate Predictions and Comparisons for 2018
+
+The code below generates plots of the models predictions, one-step.
+
+```{r predictions, echo=TRUE, fig.keep="all", warning=FALSE}
+
+# Plot local trends for each modeling specification
+# 
+# pdf(file="gam-local-in-sample.pdf")
+par(mfcol=c(2,2))
+plot(psn.local, ylab = "Poisson trends")
+abline(h=0, col="red", lwd=2)
+plot(zip.local, ylab = "ZiP trends")
+abline(h=0, col="red", lwd=2)
+plot(nb.local, ylab = "Negative binomial trends")
+abline(h=0, col="red", lwd=2)
+plot(tw.local, ylab = "Tweedie trends")
+abline(h=0, col="red", lwd=2)
+# dev.off()
+
+# pdf(file="gam-tensor-in-sample.pdf")
+par(mfcol=c(2,2))
+vis.gam(psn.local.te, ylab = "Poisson tensor trends")
+vis.gam(zip.local.te, ylab = "ZiP tensor trends")
+vis.gam(nb.local.te, ylab = "Negative binomial tensor trends")
+vis.gam(tw.local.te, ylab = "Tweedie tensor trends")
+# dev.off()
+
+# Predictions in-sample
+local.preds <- cbind(dt1[,1:2],
+                     predict(psn.local, type = "response"),
+                     predict(nb.local, type = "response"),
+#                     predict(zip.local, type = "response"),
+                     predict(tw.local, type = "response"))
+colnames(local.preds) <- c("series", "time", "P", "NB", "TW")
+
+# Tensor preds
+tensor.preds <- cbind(dt1[,1:2],
+                      predict(psn.local.te, type = "response"),
+                      predict(nb.local.te, type = "response"),
+                      predict(tw.local.te, type = "response"))
+colnames(tensor.preds) <- c("series", "time", "P", "NB", "TW")
+
+# GLMM preds
+glmm.preds <- cbind(dt1[,1:2],
+                    predict(psnar1.glmmtmb, type = "response"),
+                    predict(nbar1.glmmtmb, type = "response"),
+#                    predict(cmpar1.glmmtmb, type = "response"),
+                    predict(twar1.glmmtmb, type = "response"))
+colnames(glmm.preds) <- c("series", "time", "P", "NB", "TW")
+
+# # GAMM Preds
+# gamm.preds <- cbind(dt1[,1:2],
+#                     exp(fitted(psn1.gamm$lme)),
+#                     exp(fitted(psn.ar1.gamm$lme)),
+#                     exp(fitted(nb.gamm$lme)),
+#                     exp(fitted(tw.gamm$lme)))
+# colnames(gamm.preds) <- c("series", "time", "P", "P-AR", "NB", "TW")
+
+```
+
+<!-- # Evaluation and Metrics -->
+
+<!-- Start with results over a single out of sample period. -->
+
+## CRPS results
+
+Here we show how to compute the CRPS for a single time period for each forecast model.
+
+```{r crps, echo=TRUE, warning=FALSE}
+
+# Get last obs for comparison of an "in-sample"
+lastobs <- dt1[dt1$time==454,]
+local.last <- local.preds[local.preds$time==454,]
+tensor.last <- tensor.preds[tensor.preds$time==454,]
+glmm.last <- glmm.preds[glmm.preds$time==454,]
+#gamm.last <- gamm.preds[gamm.preds$time==454,]
+
+# Make draws from the relevant modal predictions
+
+# Local preds in-sample pdf
+N <- 1000;    # Number of draws
+n <- dim(lastobs)[1]
+k <-  1;      #  number of forecasts
+
+set.seed(1234)
+local.P.fc <- sapply(1:n, function(i) {rpois(N, local.last$P[i])})
+theta <- exp(nb.local$family$getTheta())
+local.NB.fc <- sapply(1:n, function(i) {rnbinom(N, size=theta, mu=local.last$NB[i])})
+local.TW.fc <- t(replicate(N, rTweedie(local.last$TW, p=1.581)))
+
+# Tensor preds in-sample pdf
+tensor.P.fc <- sapply(1:n, function(i) {rpois(N, tensor.last$P[i])})
+theta <- exp(nb.local.te$family$getTheta())
+tensor.NB.fc <- sapply(1:n, function(i) {rnbinom(N, size=theta, mu=tensor.last$NB[i])})
+tensor.TW.fc <- t(replicate(N, rTweedie(tensor.last$TW,
+                                        p=tw.local.te$family$getTheta(TRUE))))
+
+# glmm preds in-sample pdf
+glmm.P.fc <- sapply(1:n, function(i) {rpois(N, glmm.last$P[i])})
+glmm.NB.fc <- sapply(1:n, function(i) {rnbinom(N, size=34, mu=glmm.last$NB[i])})
+glmm.TW.fc <- t(replicate(N, rTweedie(glmm.last$TW, p=1.36)))
+
+# gamm preds in-sample pdf
+# gamm.P.fc <- sapply(1:n, function(i) {rpois(N, gamm.last$P[i])})
+# gamm.PAR.fc <- sapply(1:n, function(i) {rpois(N, gamm.last$`P-AR`[i])})
+# gamm.NB.fc <- sapply(1:n, function(i) {rnbinom(N, size=34, mu=gamm.last$NB[i])})
+# gamm.TW.fc <- t(replicate(N, rTweedie(gamm.last$TW, p=(tw.gamm$gam$family$getTheta(TRUE)))))
+
+# crps
+
+library(scoringutils)
+cat("Poisson, local:", sum(crps_sample(lastobs$y, t(local.P.fc))), "\n")
+cat("NB, local     :", sum(crps_sample(lastobs$y, t(local.NB.fc))), "\n")
+cat("Tweedie, local:", sum(crps_sample(lastobs$y, t(local.TW.fc))), "\n")
+
+cat("Poisson, tensor:", sum(crps_sample(lastobs$y, t(tensor.P.fc))), "\n")
+cat("NB, tensor     :",sum(crps_sample(lastobs$y, t(tensor.NB.fc))), "\n")
+cat("Tweedie, tensor:",sum(crps_sample(lastobs$y, t(tensor.TW.fc))), "\n")
+
+cat("Poisson, glmm  :",sum(crps_sample(lastobs$y, t(glmm.P.fc))), "\n")
+cat("NB, glmm       :",sum(crps_sample(lastobs$y, t(glmm.NB.fc))), "\n")
+cat("Tweedie, glmm  :",sum(crps_sample(lastobs$y, t(glmm.TW.fc))), "\n")
+
+# cat("Poisson, gamm  :",sum(crps_sample(lastobs$y, t(gamm.P.fc))), "\n")
+# cat("PoissonAR, gamm:",sum(crps_sample(lastobs$y, t(gamm.PAR.fc))), "\n")
+# cat("NB, gamm       :",sum(crps_sample(lastobs$y, t(gamm.NB.fc))), "\n")
+# cat("Tweedie, gamm  :",sum(crps_sample(lastobs$y, t(gamm.TW.fc))), "\n")
+
+```
+
+## Now predict all of 2018 using the data through October 2017 (14 months)
+
+We are not going to go through the cost of re-estimation here: just roll the models into the end of 2018.  This provides the 2018 forecasts based only on data through October 2017.
+
+```{r loopage-2018, echo=TRUE, warning=FALSE}
+
+local.P.2018 <- local.NB.2018 <- local.TW.2018 <- vector(mode = "list", length=14)
+
+k1 <- 454
+
+for(i in 1:14)
+{
+  # Local models
+  old.p <- apply(local.P.fc, 2, mean)
+  tmp.p <- predict(psn.local, data.frame(series=local.last[,1], 
+                                time = rep((k1+i), 191), 
+                                ged_sb_tlag_1 = old.p),
+            type = "response")
+  local.P.fc <- sapply(1:n, function(i) {rpois(N, tmp.p[i])})
+  
+  old.nb <- apply(local.NB.fc, 2, mean)
+  tmp.nb <- predict(nb.local, data.frame(series=local.last[,1], 
+                                time = rep((k1+i), 191), 
+                                ged_sb_tlag_1 = old.nb),
+            type = "response")
+  theta <- exp(nb.local$family$getTheta())
+  local.NB.fc <- sapply(1:n, function(i) {rnbinom(N, size=theta, mu=tmp.nb[i])})
+
+  old.tw <- apply(local.TW.fc, 2, mean)
+  tmp.tw <- predict(tw.local, data.frame(series=local.last[,1], 
+                                time = rep((k1+i), 191), 
+                                ged_sb_tlag_1 = old.tw),
+            type = "response")
+  local.TW.fc <- t(replicate(N, rTweedie(tmp.tw, p=1.581)))
+
+  local.P.2018[[i]] <- local.P.fc
+  local.NB.2018[[i]] <- local.NB.fc
+  local.TW.2018[[i]] <- local.TW.fc
+}
+
+
+# Now the same for the other models...
+
+tensor.P.2018 <- tensor.NB.2018 <- tensor.TW.2018 <- vector(mode = "list", length=14)
+
+k1 <- 454
+
+for(i in 1:14)
+{
+  # tensor models
+  old.p <- apply(tensor.P.fc, 2, mean)
+  tmp.p <- predict(psn.local.te, data.frame(series=tensor.last[,1], 
+                                time = rep((k1+i), 191), 
+                                ged_sb_tlag_1 = old.p),
+            type = "response")
+  tensor.P.fc <- sapply(1:n, function(i) {rpois(N, tmp.p[i])})
+  
+  old.nb <- apply(tensor.NB.fc, 2, mean)
+  tmp.nb <- predict(nb.local.te, data.frame(series=tensor.last[,1], 
+                                time = rep((k1+i), 191), 
+                                ged_sb_tlag_1 = old.nb),
+            type = "response")
+  theta <- exp(nb.local.te$family$getTheta())
+  tensor.NB.fc <- sapply(1:n, function(i) {rnbinom(N, size=theta, mu=tmp.nb[i])})
+
+  old.tw <- apply(tensor.TW.fc, 2, mean)
+  tmp.tw <- predict(tw.local.te, data.frame(series=tensor.last[,1], 
+                                time = rep((k1+i), 191), 
+                                ged_sb_tlag_1 = old.tw),
+            type = "response")
+  tensor.TW.fc <- t(replicate(N, rTweedie(tmp.tw, p=1.581)))
+
+  tensor.P.2018[[i]] <- tensor.P.fc
+  tensor.NB.2018[[i]] <- tensor.NB.fc
+  tensor.TW.2018[[i]] <- tensor.TW.fc
+}
+
+
+# glmm -- these are hard to do, since they do not easily admit more time
+glmm.P.2018 <- glmm.NB.2018 <- glmm.TW.2018 <- vector(mode = "list", length=14)
+
+k1 <- 454
+
+for(i in 1:14)
+{
+  # glmm models
+  old.p <- apply(glmm.P.fc, 2, mean)
+  tmp.p <- predict(psnar1.glmmtmb, newdata=data.frame(series=glmm.last[,1],
+                                time = as.factor(rep((k1+i), 191)),
+                                ged_sb_tlag_1 = old.p),
+            type = "response", allow.new.levels=TRUE)
+  glmm.P.fc <- sapply(1:n, function(i) {rpois(N, tmp.p[i])})
+
+  old.nb <- apply(glmm.NB.fc, 2, mean)
+  tmp.nb <- predict(nbar1.glmmtmb, data.frame(series=glmm.last[,1],
+                                time = as.factor(rep((k1+i), 191)),
+                                ged_sb_tlag_1 = old.nb),
+            type = "response", allow.new.levels=TRUE)
+#  theta <- exp(nbar1.glmmtmb$family$getTheta())
+  glmm.NB.fc <- sapply(1:n, function(i) {rnbinom(N, size=34, mu=tmp.nb[i])})
+
+  old.tw <- apply(glmm.TW.fc, 2, mean)
+  tmp.tw <- predict(twar1.glmmtmb, data.frame(series=glmm.last[,1],
+                                time = as.factor(rep((k1+i), 191)),
+                                ged_sb_tlag_1 = old.tw),
+            type = "response", allow.new.levels=TRUE)
+  glmm.TW.fc <- t(replicate(N, rTweedie(tmp.tw, p=1.581)))
+
+  glmm.P.2018[[i]] <- glmm.P.fc
+  glmm.NB.2018[[i]] <- glmm.NB.fc
+  glmm.TW.2018[[i]] <- glmm.TW.fc
+}
+
+
+# Not going to do the GAMM here, since the CRPS are so bad
+# # gamm
+# gamm.P.2018 <- gamm.NB.2018 <- gamm.TW.2018 <- vector(mode = "list", length=14)
+# 
+# k1 <- 454
+# 
+# for(i in 1:14)
+# {
+#   # gamm models
+#   old.p <- apply(gamm.P.fc, 2, mean)
+#   tmp.p <- predict(psn1.gamm, data.frame(series=gamm.last[,1],
+#                                 time = rep((k1+i), 191),
+#                                 ged_sb_tlag_1 = old.p),
+#             type = "response")
+#   gamm.P.fc <- sapply(1:n, function(i) {rpois(N, tmp.p[i])})
+# 
+# #   old.nb <- apply(gamm.NB.fc, 2, mean)
+# #   tmp.nb <- predict(nb.local.te, data.frame(series=gamm.last[,1], 
+# #                                 time = rep((k1+i), 191), 
+# #                                 ged_sb_tlag_1 = old.nb),
+# #             type = "response")
+# #   theta <- exp(nb.local.te$family$getTheta())
+# #   gamm.NB.fc <- sapply(1:n, function(i) {rnbinom(N, size=theta, mu=tmp.nb[i])})
+# # 
+# #   old.tw <- apply(gamm.TW.fc, 2, mean)
+# #   tmp.tw <- predict(tw.local.te, data.frame(series=gamm.last[,1], 
+# #                                 time = rep((k1+i), 191), 
+# #                                 ged_sb_tlag_1 = old.tw),
+# #             type = "response")
+# #   gamm.TW.fc <- t(replicate(N, rTweedie(tmp.tw, p=1.581)))
+# # 
+#   gamm.P.2018[[i]] <- gamm.P.fc
+# #   gamm.NB.2018[[i]] <- gamm.NB.fc
+# #   gamm.TW.2018[[i]] <- gamm.TW.fc
+# }
+# 
+# # 
+# # 
+
+```
+
+
+# Save the outputs for additional post-processing and analysis
+
+Here we save the image of the results of the model estimation and model selection for additional processing in forecast output and comparisons in other files.
+
+```{r savestuff}
+
+save.image("ViEWS2-prelim.RData")
+
+```
+
+<!-- # # # Now format the output for the submission for 2018 -->
+<!-- # #  -->
+<!-- # # # Quick function to do that setup for ViEWS, per instructions -->
+<!-- # # # cm-level files should have these column names:  -->
+<!-- # # # "month_id", "country_id", "draw", "outcome" -->
+<!-- # #  -->
+<!-- # # # x = forecast list array made above -->
+<!-- # # # cnum = factors for the countries -->
+<!-- # # # k1 = starting time period -->
+<!-- # # # k2 = integer sequence of forecast periods -->
+<!-- # # reorg <- function(x, cnum=lastobs[,1], k1=454, k2=length(x)) -->
+<!-- # # {  -->
+<!-- # #   # Get constants -->
+<!-- # #   tmp <- dim(x[[1]]) -->
+<!-- # #   draws <- tmp[1]; cty <- tmp[2] -->
+<!-- # #   drawvec <- 1:draws -->
+<!-- # #    -->
+<!-- # #   # Do the first one -->
+<!-- # #   xtmp <- cbind(rep(k1+1, draws*cty),    # month_id -->
+<!-- # #                 rep(cnum, each=draws),   # country_id -->
+<!-- # #                 rep(drawvec, cty),       # draw idx -->
+<!-- # #                 matrix(x[[1]], ncol=1))  # forecast value -->
+<!-- # #  -->
+<!-- # #   # Now iterate over the periods -->
+<!-- # #   for(i in 2:k2) -->
+<!-- # #   { -->
+<!-- # #     x1 <- cbind(rep(k1+i, draws*cty),    # month_id -->
+<!-- # #                 rep(cnum, each=draws),   # country_id -->
+<!-- # #                 rep(drawvec, cty),       # draw idx -->
+<!-- # #                 matrix(x[[i]], ncol=1))  # forecast value -->
+<!-- # #     xtmp <- rbind(xtmp, x1) -->
+<!-- # #   } -->
+<!-- # #  -->
+<!-- # #   colnames(xtmp) <- c("month_id", "country_id", -->
+<!-- # #                       "draw", "outcome") -->
+<!-- # #   return(as.data.frame(xtmp)) -->
+<!-- # # } -->
+<!-- # #  -->
+<!-- # # # Objects we need in the output: -->
+<!-- # # # -->
+<!-- # # # local.*.2018 -->
+<!-- # # # tensor.*.2018 -->
+<!-- # # # glmm.*.2018 -->
+<!-- #  -->
+<!-- # write_parquet(reorg(local.P.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/local_poisson_2018.parquet") -->
+<!-- # write_parquet(reorg(local.NB.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/local_negbin_2018.parquet") -->
+<!-- # write_parquet(reorg(local.TW.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/local_tweedie_2018.parquet") -->
+<!-- #  -->
+<!-- # write_parquet(reorg(tensor.P.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/tensor_poisson_2018.parquet") -->
+<!-- # write_parquet(reorg(tensor.NB.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/tensor_negbin_2018.parquet") -->
+<!-- # write_parquet(reorg(tensor.TW.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/tensor_tweedie_2018.parquet") -->
+<!-- #  -->
+<!-- # write_parquet(reorg(glmm.P.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/glmm_poisson_2018.parquet") -->
+<!-- # write_parquet(reorg(glmm.NB.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/glmm_negbin_2018.parquet") -->
+<!-- # write_parquet(reorg(glmm.TW.2018), -->
+<!-- #               "submission_template/cm/test_window_2018/glmm_tweedie_2018.parquet") -->
+
+
+<!-- ``` -->
+
+<!-- # Misc Notes / ideas -->
+
+<!-- 1)  Variable feature selection via {glmnet} and Lassos (since you can -->
+<!--     give a simple Bayesian prior to justify it via a Laplace or -->
+<!--     double-exponential form): will have a nice closed form posterior for -->
+<!--     prediction. -->
+
+<!-- 2)  GLM choices for validation: via glmnet again or ppc's. -->
+
+<!-- 3)  MVGAMs --- can account for priors, missingness, dynamic structures, -->
+<!--     etc. I like this, but need to see if it will scale --- right now I -->
+<!--     have only been playing with their toy examples. -->
+
+<!-- 4)  Can then add Tweedie distributions to #3, since there is already R -->
+<!--     code for the same (they are in the glm-family class). -->
+
+<!-- Anything on the ST-GCN front from your applied math student? -->
+
+# References
