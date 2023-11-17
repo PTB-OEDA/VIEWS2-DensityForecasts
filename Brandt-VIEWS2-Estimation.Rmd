@@ -1,16 +1,19 @@
 ---
-title: "VIEWS 2.0 Bayesian Density Forecasts Replication Code: Setup and Estimation"
+title: 'VIEWS 2.0 Bayesian Density Forecasts Replication Code: Setup and Estimation'
 author: "Patrick T. Brandt"
-description: Model specification documentation for ViEWS2 forecasts
-date: "`r format(Sys.time(), '%B %d, %Y')`" # Do not modify this
+date: "`r format(Sys.time(), '%B %d, %Y')`"
 output:
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
   html_document:
-    toc: true
-    toc_float: true
+    toc: yes
+    toc_float: yes
     toc_depth: 2
-    collapsed: true
-    smooth_scroll: true
-bibliography: Forecast-TS-2023.bib  
+    collapsed: yes
+    smooth_scroll: yes
+description: Model specification documentation for ViEWS2 forecasts
+bibliography: "Forecast-TS-2023.bib"
 ---
 
 ```{r setup, include=FALSE}
@@ -106,6 +109,8 @@ and some subsets.
 
 Now these are compressed, which means there are only data for all
 observations that are observed.
+
+*If you run your own version of this, you will likely need to change the paths to the input files.*  You can get te input files [here](https://www.dropbox.com/sh/yxk5w04p2e1xtqk/AACU2k5EUOuEeMq2kZ3gpZZwa?dl=0). 
 
 ```{r readdata, echo=TRUE}
 # For the parquet files
@@ -323,7 +328,7 @@ library(glmmTMB)
 
 Fits local Poisson and tensor Poisson models.
 
-```{r poisson, echo-TRUE, fig.keep='all'}
+```{r poisson, echo=TRUE, fig.keep='all'}
 
 # Poisson models -- simple
 
@@ -360,7 +365,7 @@ summary(psn.local.te)
 
 Fits local zero inflated Poisson and tensor zero inflated Poisson models.
 
-```{r zip, echo-TRUE, fig.keep='all'}
+```{r zip, echo=TRUE, fig.keep='all'}
 
 # ZIP Models -- simple
 
@@ -388,7 +393,7 @@ summary(zip.local.te)
 
 Fits local negative binomial and tensor negative binomial models.
 
-```{r nb, echo-TRUE, fig.keep='all'}
+```{r nb, echo=TRUE, fig.keep='all'}
 
 nb.local <- bam(y ~ ged_sb_tlag_1 + s(time, series, bs="fs"),
                  data=dt1,
@@ -442,7 +447,7 @@ dispersion terms, likely $1 < p < 2$ that are of interest.
 
 Fits local Tweedie and tensor Tweedie models.
 
-```{r tweedie, echo-TRUE, fig.keep='all'}
+```{r tweedie, echo=TRUE, fig.keep='all'}
 tw.local <- bam(y ~ ged_sb_tlag_1 + 
                   s(time, series, bs="fs"),
                 data=dt1,
