@@ -5,9 +5,11 @@
 # 20230926 : Reorganize and output forecasts for views
 # 20231002 : Corrected country and months to be correct integers (decodes the factors)
 # 20231004 : Add top codings for NA and extreme values trunctop()
+# 20240508 : Adds 2022 forecasts output to the results.
 
 library(arrow)
 source("reorg.R")
+setwd("~/VIEWS2/")
 
 # 2018 models / forecasts / data
 load("ViEWS2-prelim.RData")
@@ -23,9 +25,9 @@ dfa2021 <- read_parquet("shared_competition_data/cm_actuals_2021.parquet")
 cids <- scan("viewscountryid.txt", sep=",")
 
 cout <- cbind(as.numeric(lastobs$series), 
-       labels(lastobs$series), 
-       unique(dfa2021$country_id),
-      cids)
+              labels(lastobs$series), 
+              unique(dfa2021$country_id),
+              cids)
 
 # Keep only the objects we absolutely need
 cnum <- as.integer(cout[,4])
@@ -273,6 +275,64 @@ write_parquet(glmm.negbin.2021,
 write_parquet(glmm.tweedie.2021, 
               "Brandt_VIEWS2023/tweedie_glmm/cm/test_window_2021/glmm_tweedie_2021.parquet")
 
+#####################
+# 2022
+#####################
+load("ViEWS2-2022.RData")
+
+local.poisson.2022 <- reorg(local.P.2022, cnum=cnum , k1=492, k2=12)
+local.negbin.2022 <- reorg(local.NB.2022, cnum=cnum, k1=492, k2=12)
+local.tweedie.2022 <- reorg(local.TW.2022, cnum=cnum, k1=492, k2=12)
+
+tensor.poisson.2022 <- reorg(tensor.P.2022, cnum=cnum, k1=492, k2=12)
+tensor.negbin.2022 <- reorg(tensor.NB.2022, cnum=cnum, k1=492, k2=12)
+tensor.tweedie.2022 <- reorg(tensor.TW.2022, cnum=cnum, k1=492, k2=12)
+
+glmm.poisson.2022 <- reorg(glmm.P.2022, cnum=cnum, k1=492, k2=12)
+glmm.negbin.2022 <- reorg(glmm.NB.2022, cnum=cnum, k1=492, k2=12)
+glmm.tweedie.2022 <- reorg(glmm.TW.2022, cnum=cnum, k1=492, k2=12)
+
+# Deal with the NA and upper limits
+local.poisson.2022$outcome <- trunctop(local.poisson.2022$outcome)
+local.negbin.2022$outcome <- trunctop(local.negbin.2022$outcome)
+local.tweedie.2022$outcome <- trunctop(local.tweedie.2022$outcome)
+tensor.poisson.2022$outcome <- trunctop(tensor.poisson.2022$outcome)
+tensor.negbin.2022$outcome <- trunctop(tensor.negbin.2022$outcome)
+tensor.tweedie.2022$outcome <- trunctop(tensor.tweedie.2022$outcome)
+glmm.poisson.2022$outcome <- trunctop(glmm.poisson.2022$outcome)
+glmm.negbin.2022$outcome <- trunctop(glmm.negbin.2022$outcome)
+glmm.tweedie.2022$outcome <- trunctop(glmm.tweedie.2022$outcome)
+
+
+# Write the outputs
+write_parquet(local.poisson.2022, 
+              "Brandt_VIEWS2023/poisson_gamlocal/cm/test_window_2022/local_poisson_2022.parquet")
+
+write_parquet(local.negbin.2022, 
+              "Brandt_VIEWS2023/negbin_gamlocal/cm/test_window_2022/local_negbin_2022.parquet")
+
+write_parquet(local.tweedie.2022, 
+              "Brandt_VIEWS2023/tweedie_gamlocal/cm/test_window_2022/local_tweedie_2022.parquet")
+
+write_parquet(tensor.poisson.2022, 
+              "Brandt_VIEWS2023/poisson_gamtensor/cm/test_window_2022/tensor_poisson_2022.parquet")
+
+write_parquet(tensor.negbin.2022, 
+              "Brandt_VIEWS2023/negbin_gamtensor/cm/test_window_2022/tensor_negbin_2022.parquet")
+
+write_parquet(tensor.tweedie.2022, 
+              "Brandt_VIEWS2023/tweedie_gamtensor/cm/test_window_2022/tensor_tweedie_2022.parquet")
+
+write_parquet(glmm.poisson.2022, 
+              "Brandt_VIEWS2023/poisson_glmm/cm/test_window_2022/glmm_poisson_2022.parquet")
+
+write_parquet(glmm.negbin.2022, 
+              "Brandt_VIEWS2023/negbin_glmm/cm/test_window_2022/glmm_negbin_2022.parquet")
+
+write_parquet(glmm.tweedie.2022, 
+              "Brandt_VIEWS2023/tweedie_glmm/cm/test_window_2022/glmm_tweedie_2022.parquet")
+
+
 # Final misc checks to make sure trunctop did what it should -- these 
 # should all be empty
 table(local.negbin.2019[(is.na(local.negbin.2019$outcome)),1:2])
@@ -294,11 +354,12 @@ ls18 <- ls()[grep("2018", ls())]
 ls19 <- ls()[grep("2019", ls())]
 ls20 <- ls()[grep("2020", ls())]
 ls21 <- ls()[grep("2021", ls())]
+ls22 <- ls()[grep("2022", ls())]
 
 rm(list=setdiff(ls(), 
                 c("reorg","countries", "cout", 
-                  ls18, ls19, ls20, ls21)))
+                  ls18, ls19, ls20, ls21, ls22)))
 
 # Write out the final forecast results for later use and comparisons
-save.image("ForecastDensities_2018-2021.RData")
+save.image("ForecastDensities_2018-2022.RData")
 
