@@ -416,7 +416,7 @@ convertforc <- function(f, ds, N, freq = 12, model = "M")
   nc <- dim(f[[1]])[2]
   all <- data.frame("country_id" = rep(rep(ds[ds$month_id==maxt,]$country_id, each=N), freq),
                     "prediction" = unlist(lapply(f, "as.vector")),
-                    "sample" = 1:N,
+                    "draw" = 1:N,
                     "month_id" = rep(mint:maxt, each=N*nc),
                     "model" = as.factor(model))
 
@@ -488,7 +488,7 @@ for(i in 1:length(fnames))
                   lower.fnames[i], "_", j, ".parquet", sep="")
     # print(fpathname)
     write_parquet(subset(forcs, year==j & model==fnames[i],
-                         select=c(month_id, country_id, outcome)),
+                         select=c(month_id, country_id, draw, outcome)),
                   sink = fpathname)
   }
 }
@@ -510,7 +510,7 @@ mint <- max(ds$month_id) + 1
 k <- 14 # Number of periods predicted
 print(maxt <- mint + k - 1)
 all <- data.frame("country_id" = rep(rep(ds$country_id, each=N), k),
-                  "sample" = 1:N,
+                  "draw" = 1:N,
                   "month_id" = rep(mint:maxt, each=N*nc))
 
 # Write out the results for the true future data
