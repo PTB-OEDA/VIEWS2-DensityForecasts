@@ -6,11 +6,13 @@ output:
 # VIEWS2-DensityForecasts
 Patrick T. Brandt 
 
-## VIEWS 2 Density Forecasts
+## VIEWS 2 Bayesian Density Forecasts
 
 These are the files used to generate the models for the [2023/24 VIEWS Prediction Challenge](https://viewsforecasting.org/prediction-competition-2/).  These setup and the data and replicate the analysis presented there on Bayesian Density Forecasts. You access the data used directly from [here](https://www.dropbox.com/sh/yxk5w04p2e1xtqk/AACU2k5EUOuEeMq2kZ3gpZZwa?dl=0) since they are large not included in this repo.
 
-The files here have only lightly been edited from what was used for the forecasts in October 2023
+The forthcoming prediction competition article to which this contributes is Hegre, H. et al (Forthcoming), "The 2023/24 VIEWS prediction competition", [Journal of Peace Research](https://journals.sagepub.com/home/JPR)
+
+The files here have only lightly been edited from what was used originally for the forecasts in October 2023.  Additional files are added to cover the post-2021 data and the `true future` cases into 2024-2025.
 
 1.  Main file for the data setup and estimation in R is the `Brandt-VIEWS2-Estimation.Rmd`.  This sets up the data and does the basic model exploration and selection via AIC and some in-sample CRPS computations.  This generates the forecast output for 2018.
 
